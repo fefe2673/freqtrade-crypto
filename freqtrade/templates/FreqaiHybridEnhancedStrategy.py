@@ -5,7 +5,7 @@ import talib.abstract as ta
 from pandas import DataFrame
 from technical import qtpylib
 
-from freqtrade.strategy import IntParameter, IStrategy, merge_informative_pair  # noqa
+from freqtrade.strategy import DecimalParameter, IntParameter, IStrategy, merge_informative_pair  # noqa
 
 
 logger = logging.getLogger(__name__)
@@ -77,26 +77,42 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
     plot_config = {
         "main_plot": {
             "tema": {},
-            "bb_lowerband": {"color": "grey"},
-            "bb_middleband": {"color": "grey"},
+            "ema20": {"color": "blue"},
+            "ema50": {"color": "orange"},
+            "ema200": {"color": "red"},
             "bb_upperband": {"color": "grey"},
+            "bb_lowerband": {"color": "grey"},
         },
         "subplots": {
             "MACD": {
                 "macd": {"color": "blue"},
                 "macdsignal": {"color": "orange"},
-                "macdhist": {"color": "green"},
+                "macdhist": {"color": "grey", "type": "bar"},
             },
             "RSI": {
                 "rsi": {"color": "red"},
             },
-            "Up_or_down": {
-                "&s-up_or_down": {"color": "green"},
+            "Stochastic": {
+                "fastk": {"color": "blue"},
+                "fastd": {"color": "orange"},
             },
-            "Predicted_close": {
+            "ADX": {
+                "adx": {"color": "purple"},
+            },
+            "Volume": {
+                "volume_sma": {"color": "blue"},
+            },
+            "OBV": {
+                "obv": {"color": "green"},
+                "obv_sma": {"color": "orange"},
+            },
+            "DMF_Light": {
+                "dmf_light": {"color": "cyan"},
+            },
+            "ML_Prediction": {
                 "&-s_close": {"color": "blue"},
             },
-            "do_predict": {
+            "ML_Confidence": {
                 "do_predict": {"color": "brown"},
             },
         },
@@ -113,6 +129,10 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
     sell_rsi = IntParameter(low=50, high=100, default=70, space="sell", optimize=True, load=True)
     short_rsi = IntParameter(low=51, high=100, default=70, space="sell", optimize=True, load=True)
     exit_short_rsi = IntParameter(low=1, high=50, default=30, space="buy", optimize=True, load=True)
+    adx_threshold = IntParameter(low=15, high=40, default=25, space="buy", optimize=True, load=True)
+    volume_spike_multiplier = DecimalParameter(
+        low=1.1, high=2.0, default=1.3, decimals=1, space="buy", optimize=True, load=True
+    )
 
     def feature_engineering_expand_all(
         self, dataframe: DataFrame, period: int, metadata: dict, **kwargs
@@ -165,6 +185,10 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
             dataframe["volume"] / dataframe["volume"].rolling(period).mean()
         )
 
+        dataframe["%-stoch_fastk-period"] = ta.STOCHF(dataframe, fastk_period=period)["fastk"]
+        dataframe["%-atr-period"] = ta.ATR(dataframe, timeperiod=period)
+        dataframe["%-obv-period"] = ta.OBV(dataframe) / ta.OBV(dataframe).rolling(period).mean()
+
         return dataframe
 
     def feature_engineering_expand_basic(
@@ -199,6 +223,8 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
         dataframe["%-pct-change"] = dataframe["close"].pct_change()
         dataframe["%-raw_volume"] = dataframe["volume"]
         dataframe["%-raw_price"] = dataframe["close"]
+        dataframe["%-obv_raw"] = ta.OBV(dataframe)
+        dataframe["%-roc_3"] = ta.ROC(dataframe, timeperiod=3)
         return dataframe
 
     def feature_engineering_standard(
@@ -298,6 +324,82 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
         dataframe["macd"] = macd["macd"]
         dataframe["macdsignal"] = macd["macdsignal"]
         dataframe["macdhist"] = macd["macdhist"]
+
+        # --- Additional indicators ---
+
+        # 1. EMA 20 / EMA 50 / EMA 200 (Trend)
+        dataframe["ema20"] = ta.EMA(dataframe, timeperiod=20)
+        dataframe["ema50"] = ta.EMA(dataframe, timeperiod=50)
+        dataframe["ema200"] = ta.EMA(dataframe, timeperiod=200)
+
+        # 2. ADX (Trend strength filter)
+        dataframe["adx"] = ta.ADX(dataframe)
+
+        # 3. Stochastic Fast (Reinforces RSI)
+        stoch_fast = ta.STOCHF(dataframe)
+        dataframe["fastd"] = stoch_fast["fastd"]
+        dataframe["fastk"] = stoch_fast["fastk"]
+
+        # 4. ATR - Average True Range (Dynamic stop-loss / take-profit)
+        dataframe["atr"] = ta.ATR(dataframe, timeperiod=14)
+
+        # 5. OBV - On-Balance Volume (Accumulation / Distribution)
+        dataframe["obv"] = ta.OBV(dataframe)
+        dataframe["obv_sma"] = dataframe["obv"].rolling(20).mean()
+
+        # 6. Volume SMA (Volume confirmation)
+        dataframe["volume_sma"] = dataframe["volume"].rolling(20).mean()
+
+        # 7. ROC - Rate Of Change (DMF Light component)
+        dataframe["roc"] = ta.ROC(dataframe, timeperiod=10)
+
+        # 8. Entry Fragger Logic (volume trap detection)
+        dataframe["volume_spike_sell"] = (
+            (dataframe["close"] < dataframe["open"])
+            & (dataframe["volume"] > (dataframe["volume_sma"] * self.volume_spike_multiplier.value))
+        )
+
+        dataframe["sell_spikes_below_ema"] = 0
+        for i in range(1, 11):
+            dataframe["sell_spikes_below_ema"] += (
+                dataframe["volume_spike_sell"].shift(i)
+                & (dataframe["close"].shift(i) < dataframe["ema50"].shift(i))
+            ).astype(int)
+
+        dataframe["entry_fragger"] = (
+            (dataframe["close"] > dataframe["ema50"])
+            & (dataframe["close"] > dataframe["open"])
+            & (dataframe["close"].shift(1) <= dataframe["ema50"].shift(1))
+            & (dataframe["sell_spikes_below_ema"] >= 2)
+        )
+
+        # 9. DMF Light — Contrarian sentiment score (0-100, no on-chain data)
+        roc_range = dataframe["roc"].rolling(90).max() - dataframe["roc"].rolling(90).min()
+        roc_norm = (
+            (dataframe["roc"] - dataframe["roc"].rolling(90).min())
+            / roc_range.replace(0, np.nan)
+        ) * 100
+
+        atr_range = dataframe["atr"].rolling(90).max() - dataframe["atr"].rolling(90).min()
+        atr_norm = (
+            (dataframe["atr"] - dataframe["atr"].rolling(90).min())
+            / atr_range.replace(0, np.nan)
+        ) * 100
+
+        vol_ratio = dataframe["volume"] / dataframe["volume_sma"]
+        vol_range = vol_ratio.rolling(90).max() - vol_ratio.rolling(90).min()
+        vol_norm = (
+            (vol_ratio - vol_ratio.rolling(90).min())
+            / vol_range.replace(0, np.nan)
+        ) * 100
+
+        dataframe["dmf_light"] = (
+            roc_norm * 0.4 + (100 - atr_norm) * 0.3 + (100 - vol_norm) * 0.3
+        )
+        dataframe["dmf_light"] = dataframe["dmf_light"].rolling(14).mean()
+
+        dataframe["dmf_panic"] = dataframe["dmf_light"] < 20
+        dataframe["dmf_fomo"] = dataframe["dmf_light"] > 80
 
         return dataframe
 
