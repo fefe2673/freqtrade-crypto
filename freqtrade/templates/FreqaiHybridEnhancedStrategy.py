@@ -109,6 +109,10 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
             "DMF_Light": {
                 "dmf_light": {"color": "cyan"},
             },
+            "ATR_Pocket": {
+                "atr_compression": {"color": "gold"},
+                "atr_pocket": {"color": "magenta", "type": "bar"},
+            },
             "ML_Prediction": {
                 "&-s_close": {"color": "blue"},
             },
@@ -225,6 +229,10 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
         dataframe["%-raw_price"] = dataframe["close"]
         dataframe["%-obv_raw"] = ta.OBV(dataframe)
         dataframe["%-roc_3"] = ta.ROC(dataframe, timeperiod=3)
+        # ATR compression ratio for ML
+        dataframe["%-atr_compression"] = ta.ATR(dataframe, timeperiod=5) / ta.ATR(
+            dataframe, timeperiod=20
+        ).replace(0, np.nan)
         return dataframe
 
     def feature_engineering_standard(
@@ -400,6 +408,24 @@ class FreqaiHybridEnhancedStrategy(IStrategy):
 
         dataframe["dmf_panic"] = dataframe["dmf_light"] < 20
         dataframe["dmf_fomo"] = dataframe["dmf_light"] > 80
+
+        # ============================================================
+        # ATR Pocket — Volatility Compression Detector (from Octopus Scanner concept)
+        # Detects when volatility compresses while volume holds = potential breakout imminent
+        # ============================================================
+        atr_fast = ta.ATR(dataframe, timeperiod=5)
+        atr_slow = ta.ATR(dataframe, timeperiod=20)
+        vol_fast = dataframe["volume"].rolling(5).mean()
+        vol_slow = dataframe["volume"].rolling(20).mean()
+
+        # ATR Pocket: volatility compressed to 60% of baseline BUT volume stays at 75%+
+        dataframe["atr_pocket"] = (
+            (atr_fast < atr_slow * 0.6)    # Volatility is compressed
+            & (vol_fast > vol_slow * 0.75)  # But volume is NOT dying
+        ).astype(int)
+
+        # ATR ratio for monitoring (how compressed is the volatility right now)
+        dataframe["atr_compression"] = atr_fast / atr_slow.replace(0, np.nan)
 
         return dataframe
 
