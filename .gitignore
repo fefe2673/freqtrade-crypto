@@ -116,3 +116,12 @@ target/
 !config_examples/config_freqai.example.json
 
 docker-compose-*.yml
+
+# Configuration avec clés API (ne jamais commiter)
+config/config.py
+
+# Données CSV téléchargées par l'utilisateur
+data/*.csv
+data/*.parquet
+data/hmm_model.joblib
+data/*.png
