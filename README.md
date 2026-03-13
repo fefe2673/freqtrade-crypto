@@ -232,3 +232,174 @@ To run this bot we recommend you a cloud instance with a minimum of:
 - [TA-Lib](https://ta-lib.github.io/ta-lib-python/)
 - [virtualenv](https://virtualenv.pypa.io/en/stable/installation.html) (Recommended)
 - [Docker](https://www.docker.com/products/docker) (Recommended)
+
+---
+
+## 🇫🇷 Stratégies de Trading Personnalisées
+
+Ce dépôt inclut un ensemble de **stratégies de trading algorithmique** complémentaires au bot Freqtrade, développées en Python avec CCXT.
+
+---
+
+### 📋 Description du projet
+
+Ce projet implémente **3 stratégies de trading** indépendantes mais complémentaires, avec des outils de backtesting intégrés. Il est conçu pour fonctionner en complément du bot Freqtrade existant.
+
+---
+
+### 🗂️ Structure des fichiers personnalisés
+
+```
+strategies/
+  __init__.py
+  sma_strategy.py          # Stratégie 1 : SMA + carnet d'ordres + kill switch
+  hmm_strategy.py          # Stratégie 2 : Hidden Markov Model (régimes de marché)
+  breakout_strategy.py     # Stratégie 3 : Breakout support/résistance
+backtests/
+  __init__.py
+  backtest_breakout.py     # Backtest de la stratégie breakout
+  backtest_hmm.py          # Backtest basé sur les régimes HMM
+config/
+  config_example.py        # Exemple de configuration (à copier en config.py)
+data/
+  .gitkeep                 # Dossier pour vos fichiers CSV de données historiques
+```
+
+---
+
+### 📦 Les 3 Stratégies
+
+#### Stratégie 1 — SMA + Carnet d'Ordres + Kill Switch (`strategies/sma_strategy.py`)
+
+Stratégie de **suivi de tendance** basée sur la Simple Moving Average (SMA) :
+
+- **Signal BUY** : Prix actuel **au-dessus** de la SMA → tendance haussière
+- **Signal SELL** : Prix actuel **en dessous** de la SMA → tendance baissière
+- **Ordres limites décalés** pour obtenir un meilleur prix d'entrée
+- **Analyse du carnet d'ordres** pour optimiser les sorties
+- **Kill switch** : fermeture élégante via ordres limites
+- **Anti-surtrading** : pause configurable après chaque trade fermé
+- **Gestion P&L** automatique : take-profit et stop-loss configurables
+
+| Fonction | Description |
+|---|---|
+| `ask_bid(symbol)` | Récupère le prix ask et bid via CCXT |
+| `get_sma(symbol, timeframe, limit, sma_period)` | Calcule la SMA et génère le signal buy/sell |
+| `get_open_positions(symbol)` | Récupère les positions ouvertes |
+| `kill_switch(symbol)` | Ferme élégamment une position (ordres limites) |
+| `sleep_on_close(symbol, pause_time_minutes)` | Anti-surtrading : pause après un trade |
+| `order_book_analysis(symbol, vol_repeat, vol_time)` | Analyse du volume du carnet d'ordres |
+| `pnl_close(symbol, target_pct, max_loss_pct)` | Gestion take-profit / stop-loss |
+
+#### Stratégie 2 — Hidden Markov Model (`strategies/hmm_strategy.py`)
+
+Stratégie de **détection de régimes de marché** basée sur un modèle HMM gaussien :
+
+- **4 régimes** : Risk-On, Risk-Off, Haute Volatilité, Basse Volatilité
+- **Features** : rendements, volatilité rolling, variation du volume
+- **Entraînement** avec `GaussianHMM` + normalisation `StandardScaler`
+- **Analyse** : matrice de transition, moyennes/covariances par régime
+- **Sauvegarde** du modèle avec `joblib`
+- **Visualisation** des régimes colorés sur le graphique de prix
+
+#### Stratégie 3 — Breakout Support/Résistance (`strategies/breakout_strategy.py`)
+
+Stratégie de **cassure de niveaux techniques** :
+
+- **Support** : `close.rolling(window).min().shift(1)` (données passées uniquement, sans look-ahead)
+- **Résistance** : `close.rolling(window).max().shift(1)` (données passées uniquement, sans look-ahead)
+- **Breakout haussier** : bid > résistance × (1 + 0.1%) → ordre LONG
+- **Breakout baissier** : bid < support × (1 - 0.1%) → ordre SHORT
+- **TP/SL** configurables et optimisables (3% à 20%)
+
+---
+
+### 📊 Backtests
+
+#### Backtest Breakout (`backtests/backtest_breakout.py`)
+
+Utilise la librairie `backtesting.py` pour tester et optimiser la stratégie breakout.
+Lance automatiquement un backtest simple puis une optimisation sur grille de paramètres TP/SL.
+
+#### Backtest HMM (`backtests/backtest_hmm.py`)
+
+Entraîne le HMM sur 70% des données et teste sur les 30% restants, avec comparaison vs Buy & Hold.
+Génère des métriques : return total, Sharpe Ratio, maximum drawdown, win rate.
+
+---
+
+### 🚀 Installation des dépendances supplémentaires
+
+```bash
+pip install -r requirements.txt
+```
+
+Packages ajoutés pour les stratégies personnalisées :
+
+| Package | Utilisation |
+|---|---|
+| `hmmlearn>=0.3.0` | Modèles de Markov cachés (stratégie HMM) |
+| `scikit-learn>=1.3.0` | Normalisation des données (StandardScaler) |
+| `backtesting>=0.3.3` | Framework de backtesting |
+| `matplotlib>=3.7.0` | Visualisation des résultats |
+
+---
+
+### ⚙️ Configuration
+
+```bash
+cp config/config_example.py config/config.py
+# Éditer config/config.py avec vos clés API et paramètres
+```
+
+**Important :** Ne jamais commiter `config/config.py` — ajoutez-le à `.gitignore`.
+
+---
+
+### ▶️ Lancer les stratégies
+
+```bash
+# Stratégie SMA (trading en live)
+python strategies/sma_strategy.py
+
+# Stratégie HMM (analyse de régimes sur un CSV dans data/)
+python strategies/hmm_strategy.py data/btc_4h.csv
+
+# Stratégie Breakout (trading en live)
+python strategies/breakout_strategy.py
+
+# Backtest Breakout (nécessite un CSV dans data/)
+python backtests/backtest_breakout.py
+
+# Backtest HMM (nécessite un CSV dans data/)
+python backtests/backtest_hmm.py
+```
+
+---
+
+### ⚠️ Avertissement sur les risques du trading
+
+> **Ce projet est à des fins éducatives uniquement.**
+
+Le trading de cryptomonnaies comporte des **risques financiers importants** :
+
+- Ne jamais investir plus que ce que vous pouvez vous permettre de perdre
+- Les performances passées ne garantissent pas les résultats futurs
+- Le levier amplifie les gains ET les pertes
+- Toujours tester en **paper trading** (testnet) avant d'utiliser de l'argent réel
+- Comprendre chaque ligne de code avant de le déployer
+
+**Les auteurs déclinent toute responsabilité pour les pertes financières liées à l'utilisation de ce code.**
+
+---
+
+### 🔗 Complémentarité avec Freqtrade
+
+Ce projet est **complémentaire** au bot Freqtrade existant dans ce dépôt :
+
+| Freqtrade | Stratégies personnalisées |
+|---|---|
+| Framework complet de trading automatisé | Scripts de trading directs via CCXT |
+| Gestion via Telegram / WebUI | Exécution en ligne de commande |
+| Backtesting intégré avec FreqAI | Backtesting avec `backtesting.py` |
+| Stratégies Freqtrade standard | SMA, HMM, Breakout personnalisés |
